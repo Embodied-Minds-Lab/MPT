@@ -1,0 +1,450 @@
+data:
+  tokenizer: null
+  use_shm: False
+  train_files: ~/data/rlhf/gsm8k/train.parquet
+  val_files: ~/data/rlhf/gsm8k/test.parquet
+  prompt_key: prompt
+  reward_fn_key: data_source
+  max_prompt_length: 512
+  max_response_length: 512
+  train_batch_size: 1024
+  val_batch_size: null
+  return_raw_input_ids: False  # This should be set to true when the tokenizer between policy and rm differs
+  return_raw_chat: False
+  return_full_prompt: False
+  shuffle: True
+  filter_overlong_prompts: False # for large-scale dataset, filtering overlong prompts could be timeconsuming. You cat set the filter_overlong_prompts_workers to use multiprocessing to speed up.
+  filter_overlong_prompts_workers: 1
+  truncation: error
+  image_key: images
+  video_key: videos
+  trust_remote_code: False  # main_ppo will check this config to determine whether to use remote code for tokenizer
+  apply_chat_template_kwargs: {}
+  custom_cls:
+      path: null
+      name: null
+
+actor_rollout_ref:
+  hybrid_engine: True
+  model:
+    path: ~/models/deepseek-llm-7b-chat
+    use_shm: False
+    external_lib: null
+    override_config: { }
+    enable_gradient_checkpointing: True
+    enable_activation_offload: False
+    use_remove_padding: False
+    attn_implementation: flash_attention_2   # HF attention for the actor/ref/critic: flash_attention_2 | sdpa | flash_attention_4 | eager.
+                                             #   gemma-4 in the FA4-only trainer env B runs sdpa (+ use_remove_padding=False)
+    text_only_processor: False               # True: never load the HF processor (text-only run on a multimodal
+                                             #   architecture such as gemma-4); the VLM branches of the rollout are then skipped
+    lora_rank: 0  # Set to positive value to enable LoRA (e.g., 32)
+    lora_alpha: 16  # LoRA scaling factor
+    target_modules: all-linear  # all-linear or [q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj]
+    use_liger: False
+    use_fused_kernels: False
+    trust_remote_code: False
+  actor:
+    strategy: fsdp  # [fsdp, fsdp2], This is for backward-compatibility
+    use_adaptive_ppo_mini_batch_size: False
+    ppo_mini_update_num: 10
+    ppo_mini_batch_size: 256
+    ppo_micro_batch_size: null # will be deprecated, use ppo_micro_batch_size_per_gpu
+    ppo_micro_batch_size_per_gpu: null
+    use_dynamic_bsz: False
+    ppo_max_token_len_per_gpu: 16384 # n * ${data.max_prompt_length} + ${data.max_response_length}
+    grad_clip: 1.0
+    # pg_losses2 = -advantages * torch.clamp(ratio, 1 - cliprange_low, 1 + cliprange_high)
+    clip_ratio: 0.2 # default value if clip_ratio_low and clip_ratio_high are not specified
+    clip_ratio_low: 0.2
+    clip_ratio_high: 0.2
+    clip_ratio_c: 3.0 # lower bound of the value for Dual-clip PPO from https://arxiv.org/pdf/1912.09729
+    loss_agg_mode: "token-mean" # / "seq-mean-token-sum" / "seq-mean-token-mean"
+    entropy_coeff: 0.0                  # the MPT recipe (every environment): no entropy bonus
+    use_invalid_action_penalty: False   # the MPT recipe: an off-slice action is priced by the economy
+    invalid_action_penalty_coef: 0.1
+    use_kl_loss: False # True for GRPO
+    use_torch_compile: True # False to disable torch compile
+    kl_loss_coef: 0.001 # for grpo
+    kl_loss_type: low_var_kl # for grpo
+    # Counterfactual bid preference learning (the bid phase of the MPT act/bid alternation):
+    # sequence-level Bradley-Terry over whole bid answers (core_algos.
+    # compute_answer_preference_loss); pair rows are injected by the counterfactual collector
+    # with pref_pair_id/pref_pair_role. Act-phase iterations are plain policy gradient.
+    bid_pref_enable: True
+    bid_pref_scope: answer # answer = sequence-level Bradley-Terry over whole bid answers; the only scope in this release
+    bid_pref_coef: 1.0    # weight of the preference loss inside policy_loss
+    bid_pref_beta: 1.0    # Bradley-Terry temperature
+    # bid_pref_ref_anchor (answer scope only): anchor the sequence margin on the sampling-time
+    # log-probs of the same rows (old_log_probs) -- the DPO reference term with the sampling
+    # policy as reference: m = (lp_w - lp_w_old) - (lp_l - lp_l_old) instead of lp_w - lp_l,
+    # so the first update starts at margin 0 for every pair and the Bradley-Terry gradient is
+    # never saturated by the two answers' unconditional length/fluency difference. False keeps
+    # the unanchored margin.
+    bid_pref_ref_anchor: False
+    ppo_epochs: 1
+    shuffle: False
+    ulysses_sequence_parallel_size: 1 # sp size
+    checkpoint:
+      contents: ['model', 'optimizer', 'extra']  # with 'hf_model' you can save whole model as hf format, now only use sharded model checkpoint to save space
+    optim:
+      lr: 1e-6
+      lr_warmup_steps: -1 # Prioritized. Negative values mean delegating to lr_warmup_steps_ratio.
+      lr_warmup_steps_ratio: 0.  # the total steps will be injected during runtime
+      min_lr_ratio: 0.0   # only used with cosine lr scheduler, default to 0.0
+      num_cycles: 0.5     # only used with cosine lr scheduler, default to 0.5
+      warmup_style: constant  # select from constant/cosine
+      total_training_steps: -1  # must be override by program
+      weight_decay: 0.01
+    fsdp_config:
+      wrap_policy:
+        # transformer_layer_cls_to_wrap: None
+        min_num_params: 0
+      param_offload: False
+      optimizer_offload: False
+      offload_policy: False # only for fsdp2, offload param\grad\optimizer during train
+      reshard_after_forward: True # only for fsdp2, [True, False, int between 1 and fsdp_size]
+      fsdp_size: -1
+  ref:
+    strategy: fsdp
+    fsdp_config:
+      param_offload: False
+      reshard_after_forward: True # only for fsdp2, [True, False, int between 1 and fsdp_size]
+      wrap_policy:
+        # transformer_layer_cls_to_wrap: None
+        min_num_params: 0
+    use_torch_compile: ${actor_rollout_ref.actor.use_torch_compile}
+    log_prob_micro_batch_size: null # will be deprecated, use log_prob_micro_batch_size_per_gpu
+    log_prob_micro_batch_size_per_gpu: null
+    log_prob_use_dynamic_bsz: ${actor_rollout_ref.actor.use_dynamic_bsz}
+    log_prob_max_token_len_per_gpu: ${actor_rollout_ref.actor.ppo_max_token_len_per_gpu}
+    ulysses_sequence_parallel_size: ${actor_rollout_ref.actor.ulysses_sequence_parallel_size} # sp size
+  rollout:
+    name: sglang
+    mode: sync # sync: LLM, async: AsyncLLM
+    chat_scheduler: null # async chat scheduler, e.g examples.ppo_trainer.naive_chat_scheduler.NaiveChatCompletionScheduler
+    temperature: 1.0
+    top_k: -1 # 0 for hf rollout, -1 for vllm rollout
+    top_p: 1
+    use_fire_sampling: False # https://arxiv.org/abs/2410.21236
+    prompt_length: ${data.max_prompt_length}  # not use for opensource
+    response_length: ${data.max_response_length}
+    # for vllm rollout
+    dtype: bfloat16 # should align with FSDP
+    gpu_memory_utilization: 0.5
+    ignore_eos: False
+    enforce_eager: True
+    free_cache_engine: True
+    load_format: dummy_dtensor  # safetensors (for huge model, and set use_shm=True); dummy_dtensor: randomly init model weight
+    layered_summon: False # for huge model, layered summon can save memory (prevent OOM) but make it slower
+    tensor_model_parallel_size: 2
+    max_num_batched_tokens: 8192
+    max_model_len: null
+    max_num_seqs: 1024
+    log_prob_micro_batch_size: null # will be deprecated, use log_prob_micro_batch_size_per_gpu
+    log_prob_micro_batch_size_per_gpu: null
+    log_prob_use_dynamic_bsz: ${actor_rollout_ref.actor.use_dynamic_bsz}
+    log_prob_max_token_len_per_gpu: ${actor_rollout_ref.actor.ppo_max_token_len_per_gpu}
+    disable_log_stats: True
+    enable_chunked_prefill: True # may get higher throughput when set to True. When activated, Please increase max_num_batched_tokens or decrease max_model_len.
+    # for hf rollout
+    do_sample: True
+    # number of responses (i.e. num sample times)
+    n: 1 # > 1 for grpo
+    engine_kwargs: # inference engine parameters
+      vllm:
+        swap_space: null # null means "use the engine default value" (usually 4 GB), setting it to, e.g., 32 means 32 GB
+      sglang:
+        attention_backend: null # null means use the engine default value, available options: flashinfer, triton, flashmla
+    val_kwargs:
+      # sampling parameters for validation
+      top_k: -1 # 0 for hf rollout, -1 for vllm rollout
+      top_p: 1.0
+      temperature: 0
+      n: 1
+      do_sample: False # default eager for validation
+    multi_turn:
+      enable: False  # set to True for multi-turn tool interaction tasks; should set rollout.name to sglang as well
+      max_turns: null  # null for no limit (default max_length // 3)
+      tool_config_path: null  # null for no tool
+      format: chatml  # chatml, more formats will be supported in the future
+
+critic:
+  rollout_n: ${actor_rollout_ref.rollout.n}
+  strategy: fsdp # [fsdp, fsdp2]
+  optim:
+    lr: 1e-5
+    lr_warmup_steps_ratio: 0.  # the total steps will be injected during runtime
+    min_lr_ratio: null   # only useful for warmup with cosine
+    warmup_style: constant  # select from constant/cosine
+    total_training_steps: -1  # must be override by program
+    weight_decay: 0.01
+  model:
+    path: ~/models/deepseek-llm-7b-chat
+    use_shm: False
+    tokenizer_path: ${actor_rollout_ref.model.path}
+    override_config: { }
+    external_lib: ${actor_rollout_ref.model.external_lib}
+    enable_gradient_checkpointing: True
+    enable_activation_offload: False
+    use_remove_padding: False
+    trust_remote_code: ${actor_rollout_ref.model.trust_remote_code}
+    fsdp_config:
+      param_offload: False
+      optimizer_offload: False
+      offload_policy: False # only for fsdp2, offload param\grad\optimizer during train
+      reshard_after_forward: True # only for fsdp2, [True, False, int between 1 and fsdp_size]
+      wrap_policy:
+        # transformer_layer_cls_to_wrap: None
+        min_num_params: 0
+      fsdp_size: -1
+    lora_rank: 0  # Set to positive value to enable LoRA (e.g., 32)
+    lora_alpha: 16  # LoRA scaling factor
+    target_modules: all-linear  # all-linear or [q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj]
+  ppo_mini_batch_size: ${actor_rollout_ref.actor.ppo_mini_batch_size}
+  ppo_micro_batch_size: null # will be deprecated, use ppo_micro_batch_size_per_gpu
+  ppo_micro_batch_size_per_gpu: null
+  forward_micro_batch_size: ${critic.ppo_micro_batch_size}
+  forward_micro_batch_size_per_gpu: ${critic.ppo_micro_batch_size_per_gpu}
+  use_dynamic_bsz: ${actor_rollout_ref.actor.use_dynamic_bsz}
+  ppo_max_token_len_per_gpu: 32768 # (${actor_rollout_ref.actor.ppo_max_token_len_per_gpu}) * 2
+  forward_max_token_len_per_gpu: ${critic.ppo_max_token_len_per_gpu}
+  ulysses_sequence_parallel_size: 1 # sp size
+  ppo_epochs: ${actor_rollout_ref.actor.ppo_epochs}
+  shuffle: ${actor_rollout_ref.actor.shuffle}
+  grad_clip: 1.0
+  cliprange_value: 0.5
+  loss_agg_mode: ${actor_rollout_ref.actor.loss_agg_mode}
+  checkpoint:
+    contents: ['model', 'optimizer', 'extra']  # with 'hf_model' you can save whole model as hf format, now only use sharded model checkpoint to save space
+
+reward_model:
+  enable: False
+  strategy: fsdp
+  model:
+    input_tokenizer: ${actor_rollout_ref.model.path}  # set this to null if the chat template is identical
+    path: ~/models/FsfairX-LLaMA3-RM-v0.1
+    use_shm: False
+    external_lib: ${actor_rollout_ref.model.external_lib}
+    use_remove_padding: False
+    use_fused_kernels: ${actor_rollout_ref.model.use_fused_kernels}
+    trust_remote_code: False
+    fsdp_config:
+      wrap_policy:
+        min_num_params: 0
+      param_offload: False
+      reshard_after_forward: True # only for fsdp2, [True, False, int between 1 and fsdp_size]
+      fsdp_size: -1
+  micro_batch_size: null # will be deprecated, use micro_batch_size_per_gpu
+  micro_batch_size_per_gpu: null # set a number
+  max_length: null
+  ulysses_sequence_parallel_size: 1 # sp size
+  use_dynamic_bsz: ${critic.use_dynamic_bsz}
+  forward_max_token_len_per_gpu: ${critic.forward_max_token_len_per_gpu}
+  reward_manager: episode
+
+algorithm:
+  gamma: 1.0
+  lam: 1.0
+  adv_estimator: reinforce_mean # MPT: REINFORCE on the settled profit with a per-agent batch-mean baseline
+  norm_adv_by_std_in_grpo: True
+  group_by_agent_id: True # Whether to group by both uid and agent_id in group-aware advantage computation (Dr. MAS)
+  reinforce_group_by_prompt: False # reinforce_mean only: compute the mean baseline WITHIN each prompt-group (uid) instead of one global batch group. Still plain REINFORCE (no std, no clip, no traj-averaging) -- NOT GRPO; just a per-env baseline. Needs env.rollout.n>1 (multiple trajectories per env) or the group collapses to a single episode.
+  use_kl_in_reward: False
+  kl_penalty: kl  # how to estimate kl divergence
+  kl_ctrl:
+    type: fixed
+    kl_coef: 0.001
+    horizon: 10000
+    target_kl: 0.1
+  use_pf_ppo: False
+  pf_ppo:
+    reweight_method: pow  # ["pow", "max_min", "max_random"]
+    weight_pow: 2.0
+
+trainer:
+  balance_batch: True
+  total_epochs: 30
+  total_training_steps: null
+  project_name: verl_examples
+  experiment_name: gsm8k
+  logger: [ 'console', 'wandb' ]
+  log_val_generations: 0
+  rollout_data_dir: null # directory for logging the rollout data, no dump if null
+  nnodes: 1
+  n_gpus_per_node: 8
+  save_freq: -1
+  # auto: find the last ckpt to resume. If can't find, start from scratch
+  resume_mode: auto # or disable or resume_path if resume_from_path is set
+  resume_from_path: null
+  # evaluation mode: one validation pass over data.val_files, then exit (no training).
+  # Training runs never validate.
+  val_only: False
+  critic_warmup: 0
+  default_hdfs_dir: null
+  del_local_ckpt_after_load: False
+  default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}
+  max_actor_ckpt_to_keep: null
+  max_critic_ckpt_to_keep: null
+  # The timeout for ray worker group to wait for the register center to be ready
+  ray_wait_register_center_timeout: 300
+  device: cuda
+
+ray_init:
+  num_cpus: null # `None` means using all CPUs, which might cause hang if limited in systems like SLURM. Please set to a number allowed then.
+
+
+agent: # only for multi-agent training
+  multi_agent: True # must be True (asserted in main_ppo / ray_trainer): MPT is a society of agents
+  agent_ids: ["Logger Desk (chain)","Miner Desk (chain)","Smith Desk (chain)"]
+  model_ids: [null, null, null]  # set by the launcher (one local model dir per agent)
+  model_sharing: False  # False: each agent has a unique model, True: share the same model across agents
+  agent_specific_parameters: null # Optional: define agent-specific parameter overrides (only support actor_rollout_ref)
+  #  Dictionary format - parameter paths mapped to lists of values per agent
+  #   agent_specific_parameters.actor.optim.lr: [1e-6,1e-6,1e-7]
+  #   agent_specific_parameters.actor.ppo_micro_batch_size_per_gpu: [4,8,8]
+  orchestra_type: minecraft_chain  # minecraft_chain | navila_chain | openresearcher_chain
+  orchestra:
+    # MPT societies: one sealed-bid auction per env turn (levels {0,.2,.4,.6,.8}, 0 = pass, an
+    # all-pass turn reopens at the 0.2 floor), the winner acts on its own action slice,
+    # revenue-share settlement (pass-back share = winning bid; income(t) = Rhat_t +
+    # beta_{t+1} * income(t+1), profit(t) = (1 - beta_t) * income(t)), reward = profit - rent
+    # for the winner's bid and act rows, 0 for losing bids. Training alternates alt_act_iters
+    # act-only iterations with alt_bid_iters bid-only iterations.
+    # The training logic is ONE implementation (agent/orchestra/chain_base.py) and the three
+    # blocks carry the same values for every shared key (market, rent, alternation, cf_*). Only
+    # the environment adapter settings differ: bid_max_tokens, bid_sees_image, chain_name, and
+    # seg_scale (a reward-shape setting: off for the terminal-only deep-research reward).
+    minecraft_chain:             # MINECRAFT (Logger / Miner / Smith agents, parser-enforced verb whitelists)
+      revenue_share: True        # MUST stay True (asserted)
+      bid_pass: True             # level 0 = pass (sit the auction out, cannot win); asserted
+      bid_levels: [0.0, 0.2, 0.4, 0.6, 0.8]
+      seg_scale: True            # Rhat = r * segment_length (turns since the previous reward event)
+      bid_max: 1.0               # clamp for the model-emitted <bid>
+      bid_max_tokens: 96         # length cap of the bid probe (one sentence of reasoning + <bid>)
+      bid_sees_image: True       # every agent's bid also sees the screenshot (full observation)
+      reward_scale: 1.0          # the env reward is divided by this before settlement
+      reward_rent: 0.05          # participation rent, paid only by the agent that wins the turn
+      profit_as_reward: True     # the settled profit - rent IS the outcome reward (train only; read by main_ppo)
+      train_bid_rows: True       # overwritten each training iteration by the alternation
+      train_act_rows: True       # overwritten each training iteration by the alternation
+      chain_name: "iron-pickaxe" # the crafting goal named in the bid prompt
+      alt_act_iters: 4           # act-only iterations per cycle
+      alt_bid_iters: 1           # bid-only (counterfactual preference) iterations per cycle
+      cf_preference: True        # bid-phase iterations train the answer-level preference loss on
+                                 #   counterfactual branch pairs instead of policy gradient (no PG
+                                 #   rows that iteration). Requires ONE MC env server launched with
+                                 #   MC_SNAPSHOT=1 and >= batch_size+2 slots, plus
+                                 #   actor.bid_pref_enable=True actor.bid_pref_scope=answer.
+      cf_max_pairs: 4            # branch points snapshotted (and pairs attempted) per preference iteration
+      cf_k: 6                    # max resamples of the winner's bid to find a ranking-changing one
+      cf_p: 4                    # further policy turns each branch rolls out after the branch action
+                                 # branch points = the earliest contested turns of the iteration;
+                                 #   branch score = env reward accumulated over the branch window
+      cf_http_timeout: 1200.0    # seconds per snapshot/restore/branch HTTP call to the env server
+
+    navila_chain:                # NAVILA (Turner / Mover / Stopper agents, reward = official WaypointReward)
+      revenue_share: True
+      bid_pass: True
+      bid_levels: [0.0, 0.2, 0.4, 0.6, 0.8]
+      seg_scale: True
+      bid_max: 1.0
+      bid_max_tokens: 64         # bid probe asks for one sentence + <bid>
+      bid_sees_image: True       # every agent's bid sees the 8-frame window too (full observation)
+      reward_scale: 1.0          # episode WaypointReward is O(1-10), bids in [0,0.8] -> commensurate
+      reward_rent: 0.05
+      train_bid_rows: True       # overwritten each training iteration by the alternation
+      train_act_rows: True       # overwritten each training iteration by the alternation
+      profit_as_reward: True
+      cf_preference: True        # as minecraft_chain; requires ONE navila env server launched with
+                                 #   NAVILA_SNAPSHOT=1 and >= batch_size+2 slots
+      cf_max_pairs: 4
+      cf_k: 6
+      cf_p: 4
+      cf_http_timeout: 1200.0
+      alt_act_iters: 4
+      alt_bid_iters: 1
+    openresearcher_chain:        # DEEP RESEARCH (Searcher: browser.search / Opener: browser.open /
+                                 #   Finder: browser.find; ANY agent may answer; reward = judge verdict
+                                 #   on the answering turn only). Same MPT training as minecraft_chain;
+                                 #   the counterfactual branches run on two spare in-process envs.
+      revenue_share: True
+      bid_pass: True
+      bid_levels: [0.0, 0.2, 0.4, 0.6, 0.8]
+      seg_scale: False           # TERMINAL-ONLY reward: never scale by segment length (it would
+                                 #   multiply R by the episode length and pay for padding the chain)
+      bid_max: 1.0
+      bid_max_tokens: 128        # the agent SFT bid rows run to 115 tokens; a cap of 64 cut those
+                                 #   bids before <bid> and parsed them as a pass
+      reward_scale: 1.0          # judge reward is 0/1, bids in [0,0.8] -> commensurate
+      reward_rent: 0.05
+      train_bid_rows: True
+      train_act_rows: True
+      profit_as_reward: True
+      alt_act_iters: 4           # the MPT recipe value; inert in evaluation
+      alt_bid_iters: 1
+      cf_preference: True        # as minecraft_chain (no env server needed: make_envs builds two
+                                 #   spare deep-research envs for the branches when training)
+      cf_max_pairs: 4
+      cf_k: 6
+      cf_p: 4
+      cf_http_timeout: 1200.0    # unused by the in-process deep-research envs; kept for uniformity
+
+env:
+  env_name: minecraft_bare     # minecraft_bare | navila | openresearcher
+  seed: 0
+  max_steps: 50
+  history_length: 2
+  rollout:
+    n: 1 # trajectories per env (training)
+    val_n: 1 # the group number for validation (for pass@k and avg@k). Default to 1.
+
+  openresearcher:              # deep research (env_name=openresearcher)
+    service_url: ""            # OpenResearcher-corpus search service for TRAINING rollouts.
+                               #   "" -> $OR_SERVICE_URL, then the address file $OR_SERVICE_URL_FILE
+    service_url_val: ""        # OPTIONAL: service of a second corpus (BrowseComp-Plus) for VALIDATION,
+                               #   used only with val_corpus=val. "" -> $OR_SERVICE_URL_VAL, then
+                               #   $OR_SERVICE_URL_VAL_FILE, then (with a loud warning) the train service
+    val_corpus: train          # which corpus service the VALIDATION pool browses: `train` = the
+                               #   OpenResearcher-corpus service (the held-out OpenResearcher questions,
+                               #   as the shipped eval uses); `val` = service_url_val (BrowseComp-Plus)
+    service_timeout: 60        # per HTTP call, seconds
+    service_max_retries: 3     # transport/5xx retries before ServiceDownError ABORTS the run
+    date: ""                   # "Today's date" line of the system prompt; "" = today at env build
+    require_answer_marker: False  # True = OpenResearcher's own stop rule (<answer>/"final answer:"
+                               #   markers); False = any no-tool turn is the final answer
+    truncated_turn_is_answer: False  # a turn with <think>/<tool_call> opened but never closed hit the
+                               #   response cap. False: episode ends, reward 0, NOT judged, counted as
+                               #   `truncated` (not `answered`). True: earlier rule -- graded as the answer
+    prompt_margin: 64          # tokens reserved below data.max_prompt_length for the history view
+    keep_last_k: 2             # tool/assistant turns protected longest by the elision policy
+    elide_mode: stub           # what an elided tool response becomes (context.py): `stub` = the one-line
+                               #   placeholder (what the released deep-research agents were trained with --
+                               #   keep for those checkpoints); `header` = the page's `[cursor] title (url)`
+                               #   line + the placeholder, so 【cursor†L..】 citations still resolve to a
+                               #   page. Must match the agents' SFT data.
+    tool_dialect: auto         # how the history reaches the chat template (context.py):
+                               #   native  = the template renders tools= and the tool role itself (Qwen3)
+                               #   textual = tools folded into the system text, tool results as
+                               #             <tool_response> user turns (gemma-3/4: no usable tool role)
+                               #   auto    = native iff the template speaks <tool_call>/<tool_response>
+                               # The agents' SFT data used the same setting: SFT and RL prompts are identical.
+    think_only_is_answer: False  # False: a turn with no tool call and nothing after </think> is a burned turn
+                               #   (parse-error message, episode continues). True = the earlier rule (graded as
+                               #   an empty answer, episode over) -- to evaluate under a run's original training rules
+    judge:                     # the answer grader (OpenResearcher's HLE template), train AND val
+      api: litellm             # litellm = OpenAI-compatible endpoint; offline = exact-match stub
+      model: qwen3.5-flash   # bare name -> "openai/<name>" -> posted verbatim to api_base
+      api_base: ""             # "" -> $JUDGE_API_BASE (any OpenAI-compatible endpoint)
+      api_key: ""              # keep "" -> $JUDGE_API_KEY. Never put keys in this file.
+      api_base_env: JUDGE_API_BASE
+      api_key_env: JUDGE_API_KEY
+      max_tokens: 4096
+      temperature: 0.0
+      top_p: null
+      timeout: 180
+      max_retries: 4           # transport retries per judge call
+      num_retries: 3           # malformed-verdict retries per answer
+      max_concurrency: 16      # concurrent judge calls per env pool
+      max_consecutive_failures: 16  # that many failed grades IN A ROW -> JudgeDownError aborts the run
+                               #   (a failed grade scores 0 and would be trained on); 0 = never abort

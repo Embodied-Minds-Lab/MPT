@@ -1,0 +1,18 @@
+Vendored from OpenResearcher (snapshot 5e0c1003843b1a3d23026122efe9414a90068bf0)
+
+  $OR/backend.py                        -> backend.py                 (verbatim)
+  $OR/scripts/deploy_search_service.py  -> deploy_search_service.py   (one change: the
+                                           sys.path.insert + `from data_utils import setup_jar`
+                                           shim is replaced by `from jar_setup import setup_jar`)
+  $OR/data_utils.py::setup_jar          -> jar_setup.py               (only that function;
+                                           data_utils imports torch at import time)
+  $OR/scripts/download_jars.sh          -> scripts/download_or_jars.sh      (port)
+  $OR/scripts/download_corpus.sh        -> scripts/download_or_corpus.sh    (port)
+  $OR/scripts/build_bm25_index.sh       -> scripts/build_or_bm25_index.sh   (port)
+  $OR/scripts/start_bm25_service.sh     -> scripts/start_or_search_service.sh
+                                           (adds readiness poll + URL_FILE handshake)
+  the search service's Python dependencies
+                                        -> requirements_search_service.txt (repo root)
+
+DO NOT EDIT backend.py / deploy_search_service.py / jar_setup.py by hand; re-copy from source
+if OpenResearcher is updated.

@@ -1,0 +1,21 @@
+# MineStudio MC env server one-shot loader: copy to env.sh, fill in paths, then `source env.sh`.
+# Everything below is machine-specific; the server scripts only require that after sourcing,
+# `conda activate minestudio` has happened and Xvfb/java are on PATH.
+
+source /path/to/miniforge3/etc/profile.d/conda.sh
+conda activate minestudio
+
+# Headless X server (rootless install is fine; extract Xvfb from your distro's RPM/deb)
+export PATH=/path/to/xvfb/usr/bin:$PATH
+
+# Optional GPU rendering: VirtualGL (vglrun -d egl<N> uses NVIDIA EGL). Software rendering
+# also works, just slower. export MINESTUDIO_GPU_RENDER=1 to enable on a GPU node.
+# export PATH=/path/to/virtualgl/opt/VirtualGL/bin:$PATH
+# export LD_LIBRARY_PATH=/path/to/virtualgl/usr/lib64:$LD_LIBRARY_PATH
+
+# JDK 8 (conda: `conda install -n minestudio openjdk=8`)
+export JAVA_HOME=$CONDA_PREFIX
+export PATH=$JAVA_HOME/bin:$PATH
+
+# Simulator engine/runtime cache
+export MINESTUDIO_DIR=/path/to/persistent/minestudio

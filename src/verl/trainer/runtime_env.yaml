@@ -1,0 +1,9 @@
+working_dir: ./
+excludes: ["/.git/"]
+env_vars:
+  TORCH_NCCL_AVOID_RECORD_STREAMS: "1"
+  # ~/.local/lib/python3.12/site-packages/antlr4 shadows the conda copy and makes
+  # omegaconf fail at import ("Could not deserialize ATN"). Ray workers need this too.
+  PYTHONNOUSERSITE: "1"
+  # If you are using vllm<=0.6.3, you might need to set the following environment variable to avoid bugs:
+  # VLLM_ATTENTION_BACKEND: "XFORMERS"

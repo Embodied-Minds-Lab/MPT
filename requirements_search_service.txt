@@ -1,0 +1,17 @@
+# IMPORTANT: install tevatron from git FIRST, before `pip install -r requirements_search_service.txt`:
+#
+#     pip install "git+https://github.com/texttron/tevatron.git"
+#
+# Also needs a JDK 21 on the host (JAVA_HOME); pyjnius links against $JAVA_HOME/lib/server/libjvm.so.
+datasets>=3.0
+fastapi>=0.110
+uvicorn>=0.29
+loguru>=0.7
+duckdb>=1.0
+faiss-cpu>=1.8
+pyserini==1.6.0
+torch>=2.4
+tqdm>=4.66
+transformers>=4.51
+huggingface_hub
+pyjnius
