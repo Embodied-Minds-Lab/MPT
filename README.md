@@ -2,7 +2,7 @@
 
 <p align="center">
   <a href="https://guoweixu.com/mpt/"><img src="https://img.shields.io/badge/website-MPT-0071E3.svg" /></a>
-  <a href="https://arxiv.org/abs/PLACEHOLDER"><img src="https://img.shields.io/badge/paper-arxiv.PLACEHOLDER-B31B1B.svg" /></a>
+  <a href="https://arxiv.org/abs/2610.22322"><img src="https://img.shields.io/badge/paper-arxiv.2610.22322-B31B1B.svg" /></a>
   <img src="https://img.shields.io/badge/python-3.12-blue" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" /></a>
 </p>
@@ -163,11 +163,14 @@ JUDGE_API_BASE=https://<openai-compatible-endpoint> JUDGE_API_KEY=<key> \
 If you find MPT and our prior work EoM useful in your research, please consider citing our papers.
 
 ```bibtex
-@article{xu2026mpt,
-  title   = {Learning Self-Orchestration in Decentralized Agent Swarms},
-  author  = {Xu, Guowei and Qi, Zhenting and Kiruga, Amani and Lakkaraju, Himabindu and Du, Yilun},
-  journal = {[venue]},
-  year    = {[year]}
+@misc{xu2026learningselforchestrationdecentralizedagent,
+      title={Learning Self-Orchestration in Decentralized Agent Swarms}, 
+      author={Guowei Xu and Zhenting Qi and Amani Kiruga and Himabindu Lakkaraju and Yilun Du},
+      year={2026},
+      eprint={2610.22322},
+      archivePrefix={arXiv},
+      primaryClass={cs.MA},
+      url={https://arxiv.org/abs/2610.22322}, 
 }
 
 @inproceedings{qi2026economy,
